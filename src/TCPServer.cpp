@@ -47,13 +47,19 @@ void TCPServer::bindSvr(const char *ip_addr, short unsigned int port) {
 		throw socket_error(std::string("failed to listen on server socket: ") + strerror(errno));
 	
 	selector.addFD(FD<void>(fd, nullptr, [this](int fd) -> std::shared_ptr<Buffer>{
-		auto bindAddr = sockaddr_in{};
-		auto bindAddrLength = socklen_t{};
+		auto bindAddr = sockaddr_storage{};
+		auto bindAddrLength = socklen_t{sizeof(bindAddr)};
 		auto accepted = accept4(fd, reinterpret_cast<sockaddr*>(&bindAddr), &bindAddrLength, SOCK_NONBLOCK);
 		if (accepted >= 0) {
 			std::array<char, 256> addr{};
-			inet_ntop(AF_INET, &bindAddr, addr.data(), addr.size());
-			fprintf(stdout, "Received connection %d from %s\n", accepted, addr.data());
+			const char * data;
+			if (bindAddr.ss_family == AF_INET)
+				data = inet_ntop(bindAddr.ss_family, &(((sockaddr_in*)&bindAddr)->sin_addr), addr.data(), addr.size());
+			else
+				data = inet_ntop(bindAddr.ss_family, &(((sockaddr_in6*)&bindAddr)->sin6_addr), addr.data(), addr.size());
+			if (data == nullptr)
+				fprintf(stdout, "Failed to parse IP address: %s\n", strerror(errno));
+			fprintf(stdout, "Received connection %d from %s\n", accepted, data);
 			auto greeting = createGreeting();
 			selector.addFD(accepted);
 			selector.writeToFD(accepted, std::make_shared<Buffer>(greeting));
