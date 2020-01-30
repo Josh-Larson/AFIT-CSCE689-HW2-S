@@ -205,12 +205,15 @@ enum class SelectLoopTermination {
 
 template<typename T>
 using SelectorReadCallback = std::function<void(int, const std::shared_ptr<T>&, DynamicBuffer&)>;
+template<typename T>
+using SelectorCloseCallback = std::function<void(int, const std::shared_ptr<T>&)>;
 
 template<typename T>
 class Selector {
 	using FDPTR = std::shared_ptr<FD<T>>;
 	std::vector<FDPTR> fds;
 	SelectorReadCallback<T> readCallback = [](auto, auto, auto){};
+	SelectorCloseCallback<T> closeCallback = [](auto, auto){};
 	std::atomic<bool> running = true;
 	
 	public:
@@ -219,6 +222,10 @@ class Selector {
 	
 	inline void setReadCallback(const SelectorReadCallback<T> & callback) {
 		this->readCallback = callback;
+	}
+	
+	inline void setCloseCallback(const SelectorCloseCallback<T> & callback) {
+		this->closeCallback = callback;
 	}
 	
 	inline void addFD(FD<T> && fd) { fds.emplace_back(std::make_shared<FD<T>>(std::move(fd))); }
@@ -241,6 +248,7 @@ class Selector {
 		const auto it = std::find_if(std::cbegin(fds), std::cend(fds), [fd](const auto & a) { return a->getFD() == fd; });
 		if (it != std::cend(fds)) {
 			fprintf(stdout, "Closing connection to FD %d\n", (*it)->getFD());
+			closeCallback((*it)->getFD(), (*it)->getData());
 			fds.erase(it);
 		}
 	}

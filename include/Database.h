@@ -104,6 +104,10 @@ class Database {
 				}
 			}
 		}
+		if (currentColumn+1 == columns) {
+			data[currentColumn] = std::string(&stringBuffer[0], stringBuffer.size());
+			op(data);
+		}
 		close(fd);
 		return 0;
 	}

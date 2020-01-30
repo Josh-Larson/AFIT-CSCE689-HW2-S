@@ -14,7 +14,8 @@
 
 TCPServer::TCPServer() : Server(),
 						 selector{} {
-	selector.setReadCallback([this](auto fd, const auto data, auto & buffer){onRead(fd, data, buffer);});
+	selector.setReadCallback([this](auto fd, const auto & data, auto & buffer){onRead(fd, data, buffer);});
+	selector.setCloseCallback([this](auto fd, const auto & data){onClose(fd, data);});
 }
 
 /**********************************************************************************************
@@ -59,18 +60,26 @@ void TCPServer::bindSvr(const char *ip_addr, short unsigned int port) {
 				data = inet_ntop(bindAddr.ss_family, &(((sockaddr_in*)&bindAddr)->sin_addr), addr.data(), addr.size());
 			else
 				data = inet_ntop(bindAddr.ss_family, &(((sockaddr_in6*)&bindAddr)->sin6_addr), addr.data(), addr.size());
-			if (data == nullptr)
+			if (data == nullptr) {
 				fprintf(stderr, "Failed to parse IP address: %s\n", strerror(errno));
-			if (!whitelist.find([data=std::string(data)](const auto & row) -> bool { return row[0] == data; })) {
+				close(accepted);
+				return nullptr;
+			}
+			std::string ip = data;
+			if (!whitelist.find([ip, data=std::string(data)](const auto & row) -> bool { return row[0] == ip; })) {
 				fprintf(stdout, "Unrecognized client IP: %s\n", data);
+				log("Unrecognized client IP: " + ip);
 				close(accepted);
 				return nullptr;
 			}
 			fprintf(stdout, "Received connection %d from %s\n", accepted, data);
-			selector.addFD(FD<StoredDataType>(accepted, std::make_shared<StoredDataType>()));
+			log("Received connection from " + ip);
+			selector.addFD(FD<StoredDataType>(accepted, std::make_shared<StoredDataType>(StoredDataType {.ip = ip})));
 		}
 		return nullptr;
 	}, /* writeHandler */ [](auto, auto, auto){return -1;}, /* closeHandler */ [](auto fd){close(fd);}));
+	
+	log("Server Started.");
 }
 
 /**********************************************************************************************
@@ -105,6 +114,10 @@ void TCPServer::listenSvr() {
 
 void TCPServer::shutdown() {
 	selector.clearFDs();
+}
+
+void TCPServer::onClose(int fd, const std::shared_ptr<StoredDataType> &data) {
+	log(data->username + " disconnected from " + data->ip);
 }
 
 void TCPServer::onRead(int fd, StoredDataPointer data, DynamicBuffer & buffer) {
@@ -187,6 +200,7 @@ void TCPServer::onReadLoginSetUsername(int fd, const std::shared_ptr<StoredDataT
 		selector.writeToFD(fd, DisplayMessage("Welcome to the server, " + msg.username + "\n").encode());
 		selector.writeToFD(fd, LoginSetUsernameResponse(true).encode());
 	} else {
+		log("Unknown username: " + msg.username + " from " + data->ip);
 		selector.writeToFD(fd, LoginSetUsernameResponse(false).encode());
 		selector.removeFD(fd);
 	}
@@ -224,8 +238,8 @@ void TCPServer::onReadLoginAuthenticate(int fd, const std::shared_ptr<StoredData
 	}
 	auto userData = passwd.find([&](const auto & row) { return row[0] == data->username; });
 	if (!userData) {
-		selector.writeToFD(fd, LoginAuthenticateResponse(false).encode());
 		selector.writeToFD(fd, DisplayMessage("Your username disappeared.\n").encode());
+		selector.writeToFD(fd, LoginAuthenticateResponse(false).encode());
 		selector.removeFD(fd);
 		return;
 	}
@@ -233,13 +247,23 @@ void TCPServer::onReadLoginAuthenticate(int fd, const std::shared_ptr<StoredData
 	data->passwordAttempts++;
 	if (hashed == (*userData)[2]) {
 		data->passwordVerified = true;
-		selector.writeToFD(fd, LoginAuthenticateResponse(true).encode());
 		selector.writeToFD(fd, DisplayMessage(createGreeting()).encode());
+		selector.writeToFD(fd, LoginAuthenticateResponse(true).encode());
+		log(data->username + " successfully logged in from " + data->ip);
 	} else {
+		selector.writeToFD(fd, DisplayMessage("Invalid password.  "+std::to_string(3-data->passwordAttempts)+" attempt"+(data->passwordAttempts==2 ? "" : "s")+" remaining.\n").encode());
 		selector.writeToFD(fd, LoginAuthenticateResponse(false).encode());
-		selector.writeToFD(fd, DisplayMessage("Invalid password.  "+std::to_string(3-data->passwordAttempts)+" attempts remaining.\n").encode());
 		if (data->passwordAttempts >= 3) {
 			selector.removeFD(fd);
+		} else if (data->passwordAttempts >= 2) {
+			log("Two failed password attempts from "+data->username+" at "+data->ip);
 		}
 	}
+}
+
+void TCPServer::log(std::string data) {
+	auto result = time(nullptr);
+	std::array<char, 100> timeString{};
+	std::strftime(timeString.data(), timeString.size(), "%Y-%m-%d %H:%M:%S", std::localtime(&result));
+	logfile.insert({timeString.data(), std::move(data)});
 }

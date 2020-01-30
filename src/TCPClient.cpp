@@ -212,9 +212,13 @@ void TCPClient::onReadLoginSetPasswordResponse(int fd, const std::shared_ptr<Sto
 }
 
 void TCPClient::onReadLoginAuthenticateResponse(int fd, const std::shared_ptr<StoredDataType> &data, LoginAuthenticateResponse msg) {
-	clientInputState = ClientInputState::NONE;
-	if (!msg.success) {
-		selector.stop();
+	if (msg.success) {
+		clientInputState = ClientInputState::NONE;
+	} else {
+		fprintf(stdout, "Password: ");
+		fflush(stdout);
+		clientInputState = ClientInputState::WAITING_FOR_LOGIN_PASSWORD;
+		Security::INSTANCE()->setFDEcho(0, false);
 	}
 }
 

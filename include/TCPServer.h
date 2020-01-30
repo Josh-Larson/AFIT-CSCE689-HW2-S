@@ -4,9 +4,12 @@
 #include <Selector.h>
 #include <NetworkMessage.h>
 #include <Database.h>
+#include <ctime>
+#include <utility>
 
 class TCPServer : public Server {
 	struct User {
+		std::string ip        = "";
 		std::string username  = "";
 		int passwordAttempts  = 0;
 		bool usernameVerified = false;
@@ -16,8 +19,9 @@ class TCPServer : public Server {
 	using StoredDataType = User;
 	using StoredDataPointer = const std::shared_ptr<StoredDataType>&;
 	Selector<StoredDataType> selector;
-	Database<1, ','> whitelist {"whitelist"};
-	Database<3, ','> passwd    {"passwd"};
+	Database<1, ','>  whitelist {"whitelist"};
+	Database<3, ','>  passwd    {"passwd"};
+	Database<2, '\t'> logfile   {"server.log"};
 	
 	public:
 	TCPServer();
@@ -30,8 +34,10 @@ class TCPServer : public Server {
 	private:
 	static std::string createGreeting();
 	static std::string createMenu();
+	void log(std::string data);
 	
 	void onRead(int fd, StoredDataPointer data, DynamicBuffer & buffer);
+	void onClose(int fd, StoredDataPointer data);
 	
 	void onReadHelloRequest(int fd, StoredDataPointer data, HelloMessage msg);
 	void onReadGeneric1Request(int fd, StoredDataPointer data, Generic1Message msg);

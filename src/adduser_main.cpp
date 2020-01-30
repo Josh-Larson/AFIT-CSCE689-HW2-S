@@ -22,6 +22,10 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Usernames cannot have a comma in them.\n");
 		return -1;
 	}
+	if (username.find('\t') != std::string::npos) {
+		fprintf(stderr, "Usernames cannot have a tab in them.\n");
+		return -1;
+	}
 	
 	Database<3, ','> passwd("passwd");
 	if (passwd.find([&](const auto &row) { return row[0] == username; })) {
