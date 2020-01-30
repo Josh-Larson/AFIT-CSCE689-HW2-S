@@ -4,6 +4,7 @@
 #include <cmath>
 #include <random>
 #include <cassert>
+#include <termios.h>
 
 Security Security::instance{};
 std::array<char, 64> Security::base64EncodeAlphabet = {
@@ -27,7 +28,7 @@ std::string Security::hash(const std::string& password, const std::string& salt)
 	uint32_t parallelism = 1;       // number of threads and lanes
 	std::array<uint8_t, 32> ret{};
 	
-	argon2i_hash_raw(t_cost, m_cost, parallelism, password.c_str(), password.length(), salt.c_str(), salt.length(), ret.data(), ret.size());
+	argon2d_hash_raw(t_cost, m_cost, parallelism, password.c_str(), password.length(), salt.c_str(), salt.length(), ret.data(), ret.size());
 	
 	return base64Encode(ret.data(), ret.size());
 }
@@ -70,7 +71,7 @@ std::string Security::base64Encode(const void *dataRaw, size_t length) const noe
 
 std::vector<uint8_t> Security::base64Decode(const std::string &base64) const noexcept {
 	std::vector<uint8_t> ret;
-//	ret.resize(static_cast<int>(std::ceil(base64.length() / 4.0)) * 3);
+	ret.reserve(static_cast<int>(std::ceil(base64.length() / 4.0)) * 3);
 	std::array<uint8_t, 4> decodedChunk{};
 	const auto base64Length = base64.length();
 	int index = 0;
@@ -102,4 +103,18 @@ std::vector<uint8_t> Security::base64Decode(const std::string &base64) const noe
 	}
 	
 	return ret;
+}
+
+void Security::setFDEcho(int fd, bool echo) {
+	auto terminalAttributes = termios{};
+	
+	if (tcgetattr(fd, &terminalAttributes) != 0)
+		return;
+	
+	if (echo)
+		terminalAttributes.c_lflag |= ECHO;
+	else
+		terminalAttributes.c_lflag &= ~ECHO;
+	
+	tcsetattr(fd, TCSAFLUSH, &terminalAttributes);
 }

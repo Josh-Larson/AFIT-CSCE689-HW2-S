@@ -65,7 +65,7 @@ class DynamicBuffer {
 	DynamicBuffer() = default;
 	~DynamicBuffer() = default;
 	
-	std::shared_ptr<Buffer> getNextBuffer() const { assert(!buffers.empty()); return buffers.front(); }
+	[[nodiscard]] std::shared_ptr<Buffer> getNextBuffer() const { assert(!buffers.empty()); return buffers.front(); }
 	void advanceBuffer(size_t count);
 	void addBuffer(const std::shared_ptr<Buffer>&);
 	void addBuffer(DynamicBuffer&);

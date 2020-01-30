@@ -1,6 +1,9 @@
 #include "TCPServer.h"
 
 #include <exceptions.h>
+#include <NetworkMessage.h>
+#include <Database.h>
+#include <Security.h>
 
 #include <sys/socket.h>
 #include <unistd.h>
@@ -8,8 +11,6 @@
 #include <arpa/inet.h>
 #include <string>
 #include <cstring>
-#include <NetworkMessage.h>
-#include <Database.h>
 
 TCPServer::TCPServer() : Server(),
 						 selector{} {
@@ -47,7 +48,7 @@ void TCPServer::bindSvr(const char *ip_addr, short unsigned int port) {
 	if (listen(fd, 32) < 0)
 		throw socket_error(std::string("failed to listen on server socket: ") + strerror(errno));
 	
-	selector.addFD(FD<void>(fd, nullptr, [&](int fd) -> std::shared_ptr<Buffer>{
+	selector.addFD(FD<StoredDataType>(fd, nullptr, [&](int fd) -> std::shared_ptr<Buffer>{
 		auto bindAddr = sockaddr_storage{};
 		auto bindAddrLength = socklen_t{sizeof(bindAddr)};
 		auto accepted = accept4(fd, reinterpret_cast<sockaddr*>(&bindAddr), &bindAddrLength, SOCK_NONBLOCK);
@@ -66,9 +67,7 @@ void TCPServer::bindSvr(const char *ip_addr, short unsigned int port) {
 				return nullptr;
 			}
 			fprintf(stdout, "Received connection %d from %s\n", accepted, data);
-			auto greeting = createGreeting();
-			selector.addFD(accepted);
-			selector.writeToFD(accepted, std::make_shared<Buffer>(greeting));
+			selector.addFD(FD<StoredDataType>(accepted, std::make_shared<StoredDataType>()));
 		}
 		return nullptr;
 	}, /* writeHandler */ [](auto, auto, auto){return -1;}, /* closeHandler */ [](auto fd){close(fd);}));
@@ -108,16 +107,10 @@ void TCPServer::shutdown() {
 	selector.clearFDs();
 }
 
-/* Not ideal.. but works for the time being */
-#define HANDLE_MESSAGE(FUNCTION, MESSAGE_TYPE)  {\
-                                                    MESSAGE_TYPE msg;\
-                                                    if (msg.get(buffer)) \
-                                                        FUNCTION(fd, data, msg); \
-                                                }
-
 void TCPServer::onRead(int fd, StoredDataPointer data, DynamicBuffer & buffer) {
 	Message message{};
-	while (message.peek(buffer)) {
+	bool ready = true;
+	while (ready && message.peek(buffer)) {
 		fprintf(stdout, "Received message: %d\n", static_cast<int>(message.type));
 		switch (message.type) {
 			case MessageType::HELLO:     HANDLE_MESSAGE(onReadHelloRequest,    HelloMessage) break;
@@ -127,13 +120,18 @@ void TCPServer::onRead(int fd, StoredDataPointer data, DynamicBuffer & buffer) {
 			case MessageType::GENERIC_4: HANDLE_MESSAGE(onReadGeneric4Request, Generic4Message) break;
 			case MessageType::GENERIC_5: HANDLE_MESSAGE(onReadGeneric5Request, Generic5Message) break;
 			case MessageType::MENU:      HANDLE_MESSAGE(onReadMenuRequest,     MenuMessage) break;
+			case MessageType::DISPLAY_MESSAGE: break; // You're not the boss of me!
+			case MessageType::LOGIN_SET_USERNAME: HANDLE_MESSAGE(onReadLoginSetUsername, LoginSetUsername) break;
+			case MessageType::LOGIN_SET_PASSWORD: HANDLE_MESSAGE(onReadLoginSetPassword, LoginSetPassword) break;
+			case MessageType::LOGIN_AUTHENTICATE: HANDLE_MESSAGE(onReadLoginAuthenticate, LoginAuthenticate) break;
 			case MessageType::UNKNOWN:
 			default:
 				selector.writeToFD(fd, std::make_shared<Buffer>("Unknown message!\n"));
 				fprintf(stdout, "Unknown message!\n");
+				message.get(buffer);
 				break;
 		}
-		buffer.getNext(&message, sizeof(Message));
+//		buffer.getNext(&message, sizeof(Message));
 	}
 }
 
@@ -151,29 +149,97 @@ std::string TCPServer::createMenu() {
 }
 
 void TCPServer::onReadHelloRequest(int fd, const std::shared_ptr<StoredDataType> &data, HelloMessage msg) {
-	selector.writeToFD(fd, std::make_shared<Buffer>("Hello there.\n"));
+	selector.writeToFD(fd, DisplayMessage("Hello there.\n").encode());
 }
 
 void TCPServer::onReadGeneric1Request(int fd, const std::shared_ptr<StoredDataType> &data, Generic1Message msg) {
-	selector.writeToFD(fd, std::make_shared<Buffer>("So uncivilized\n"));
+	selector.writeToFD(fd, DisplayMessage("So uncivilized\n").encode());
 }
 
 void TCPServer::onReadGeneric2Request(int fd, const std::shared_ptr<StoredDataType> &data, Generic2Message msg) {
-	selector.writeToFD(fd, std::make_shared<Buffer>("I don't like sand. It's coarse and rough and irritating... and it gets everywhere\n"));
+	selector.writeToFD(fd, DisplayMessage("I don't like sand. It's coarse and rough and irritating... and it gets everywhere\n").encode());
 }
 
 void TCPServer::onReadGeneric3Request(int fd, const std::shared_ptr<StoredDataType> &data, Generic3Message msg) {
-	selector.writeToFD(fd, std::make_shared<Buffer>("Now this is podracing\n"));
+	selector.writeToFD(fd, DisplayMessage("Now this is podracing\n").encode());
 }
 
 void TCPServer::onReadGeneric4Request(int fd, const std::shared_ptr<StoredDataType> &data, Generic4Message msg) {
-	selector.writeToFD(fd, std::make_shared<Buffer>("I AM the Senate.\n"));
+	selector.writeToFD(fd, DisplayMessage("I AM the Senate.\n").encode());
 }
 
 void TCPServer::onReadGeneric5Request(int fd, const std::shared_ptr<StoredDataType> &data, Generic5Message msg) {
-	selector.writeToFD(fd, std::make_shared<Buffer>("*kills younglings*\n"));
+	selector.writeToFD(fd, DisplayMessage("*kills younglings*\n").encode());
 }
 
 void TCPServer::onReadMenuRequest(int fd, const std::shared_ptr<StoredDataType> &data, MenuMessage msg) {
-	selector.writeToFD(fd, std::make_shared<Buffer>(createMenu()));
+	selector.writeToFD(fd, DisplayMessage(createMenu()).encode());
+}
+
+void TCPServer::onReadLoginSetUsername(int fd, const std::shared_ptr<StoredDataType> &data, LoginSetUsername msg) {
+	if (data->usernameVerified) {
+		selector.writeToFD(fd, DisplayMessage("You are already logged in!\n").encode());
+		return;
+	}
+	if (passwd.find([&](const auto & row) { return row[0] == msg.username; })) {
+		data->username = msg.username;
+		data->usernameVerified = true;
+		selector.writeToFD(fd, DisplayMessage("Welcome to the server, " + msg.username + "\n").encode());
+		selector.writeToFD(fd, LoginSetUsernameResponse(true).encode());
+	} else {
+		selector.writeToFD(fd, LoginSetUsernameResponse(false).encode());
+		selector.removeFD(fd);
+	}
+}
+
+void TCPServer::onReadLoginSetPassword(int fd, const std::shared_ptr<StoredDataType> &data, LoginSetPassword msg) {
+	if (!data->usernameVerified || !data->passwordVerified) {
+		selector.writeToFD(fd, DisplayMessage("You are not logged in!\n").encode());
+		selector.removeFD(fd);
+		return;
+	}
+	bool updated = false;
+	bool success = passwd.update([&](const auto & row) -> Database<3, ','>::DatabaseRow {
+		if (row[0] == data->username) {
+			updated = true;
+			return {row[0], row[1], Security::INSTANCE()->hash(msg.password, row[1])};
+		}
+		return row;
+	});
+	if (success && updated) {
+		selector.writeToFD(fd, DisplayMessage("Password Changed.\n").encode());
+		selector.writeToFD(fd, LoginSetPasswordResponse(true).encode());
+	} else {
+		selector.writeToFD(fd, DisplayMessage("Failed to update your password.\n").encode());
+		selector.writeToFD(fd, LoginSetPasswordResponse(false).encode());
+		// TODO: Handle user disappearing after logging in?
+	}
+}
+
+void TCPServer::onReadLoginAuthenticate(int fd, const std::shared_ptr<StoredDataType> &data, LoginAuthenticate msg) {
+	if (!data->usernameVerified) {
+		selector.writeToFD(fd, DisplayMessage("You are not logged in!\n").encode());
+		selector.removeFD(fd);
+		return;
+	}
+	auto userData = passwd.find([&](const auto & row) { return row[0] == data->username; });
+	if (!userData) {
+		selector.writeToFD(fd, LoginAuthenticateResponse(false).encode());
+		selector.writeToFD(fd, DisplayMessage("Your username disappeared.\n").encode());
+		selector.removeFD(fd);
+		return;
+	}
+	auto hashed = Security::INSTANCE()->hash(msg.password, (*userData)[1]);
+	data->passwordAttempts++;
+	if (hashed == (*userData)[2]) {
+		data->passwordVerified = true;
+		selector.writeToFD(fd, LoginAuthenticateResponse(true).encode());
+		selector.writeToFD(fd, DisplayMessage(createGreeting()).encode());
+	} else {
+		selector.writeToFD(fd, LoginAuthenticateResponse(false).encode());
+		selector.writeToFD(fd, DisplayMessage("Invalid password.  "+std::to_string(3-data->passwordAttempts)+" attempts remaining.\n").encode());
+		if (data->passwordAttempts >= 3) {
+			selector.removeFD(fd);
+		}
+	}
 }

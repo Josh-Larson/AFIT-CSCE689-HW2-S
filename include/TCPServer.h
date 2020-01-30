@@ -6,7 +6,14 @@
 #include <Database.h>
 
 class TCPServer : public Server {
-	using StoredDataType = void;
+	struct User {
+		std::string username  = "";
+		int passwordAttempts  = 0;
+		bool usernameVerified = false;
+		bool passwordVerified = false;
+	};
+	
+	using StoredDataType = User;
 	using StoredDataPointer = const std::shared_ptr<StoredDataType>&;
 	Selector<StoredDataType> selector;
 	Database<1, ','> whitelist {"whitelist"};
@@ -33,4 +40,7 @@ class TCPServer : public Server {
 	void onReadGeneric4Request(int fd, StoredDataPointer data, Generic4Message msg);
 	void onReadGeneric5Request(int fd, StoredDataPointer data, Generic5Message msg);
 	void onReadMenuRequest(int fd, StoredDataPointer data, MenuMessage msg);
+	void onReadLoginSetUsername(int fd, StoredDataPointer data, LoginSetUsername msg);
+	void onReadLoginSetPassword(int fd, StoredDataPointer data, LoginSetPassword msg);
+	void onReadLoginAuthenticate(int fd, StoredDataPointer data, LoginAuthenticate msg);
 };

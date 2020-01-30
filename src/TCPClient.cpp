@@ -7,6 +7,7 @@
 #include <fcntl.h>
 
 #include <NetworkMessage.h>
+#include <Security.h>
 
 /**********************************************************************************************
  * TCPClient (constructor) - Creates a Stdin file descriptor to simplify handling of user input. 
@@ -65,6 +66,9 @@ void TCPClient::connectTo(const char *ip_addr, unsigned short port) {
  **********************************************************************************************/
 
 void TCPClient::handleConnection() {
+	fprintf(stdout, "\n----- Login -----\n\nUsername: ");
+	fflush(stdout);
+	clientInputState = ClientInputState::WAITING_FOR_LOGIN_USERNAME;
 	auto code = selector.selectLoop();
 	switch (code) {
 		case SelectLoopTermination::SUCCESS:
@@ -92,7 +96,20 @@ void TCPClient::closeConn() {
 
 void TCPClient::onRead(int fd, const std::shared_ptr<void> &data, DynamicBuffer & buffer) {
 	if (fd != STDIN_FILENO) {
-		selector.writeToFD(STDIN_FILENO, buffer);
+		Message message{};
+		bool ready = true;
+		while (ready && message.peek(buffer)) {
+			switch (message.type) {
+				case MessageType::DISPLAY_MESSAGE:     HANDLE_MESSAGE(onReadDisplayMessage, DisplayMessage) break;
+				case MessageType::LOGIN_SET_USERNAME_RESPONSE: HANDLE_MESSAGE(onReadLoginSetUsernameResponse, LoginSetUsernameResponse) break;
+				case MessageType::LOGIN_SET_PASSWORD_RESPONSE: HANDLE_MESSAGE(onReadLoginSetPasswordResponse, LoginSetPasswordResponse) break;
+				case MessageType::LOGIN_AUTHENTICATE_RESPONSE: HANDLE_MESSAGE(onReadLoginAuthenticateResponse, LoginAuthenticateResponse) break;
+				default:
+					fprintf(stdout, "\nReceived unknown message from server: %d.\n", static_cast<int>(message.type));
+					message.get(buffer);
+					break;
+			}
+		}
 		return;
 	}
 	while (true) {
@@ -125,7 +142,28 @@ void TCPClient::onRead(int fd, const std::shared_ptr<void> &data, DynamicBuffer 
 
 void TCPClient::handleUserInput(std::string input) {
 	std::unique_ptr<Message> message = nullptr;
-	if (input == "hello") {
+	if (clientInputState == ClientInputState::WAITING_FOR_LOGIN_USERNAME) {
+		message = std::make_unique<LoginSetUsername>(input);
+	} else if (clientInputState == ClientInputState::WAITING_FOR_LOGIN_PASSWORD) {
+		Security::INSTANCE()->setFDEcho(0, true);
+		fprintf(stdout, "\n");
+		message = std::make_unique<LoginAuthenticate>(input);
+	} else if (clientInputState == ClientInputState::WAITING_FOR_CHANGE_PASSWORD1) {
+		passwordTemporaryStorage = input;
+		fprintf(stdout, "\nPlease enter your password one more time: ");
+		fflush(stdout);
+		clientInputState = ClientInputState::WAITING_FOR_CHANGE_PASSWORD2;
+	} else if (clientInputState == ClientInputState::WAITING_FOR_CHANGE_PASSWORD2) {
+		clientInputState = ClientInputState::NONE;
+		Security::INSTANCE()->setFDEcho(0, true);
+		if (input == passwordTemporaryStorage) {
+			fprintf(stdout, "\n");
+			message = std::make_unique<LoginSetPassword>(input);
+		} else {
+			fprintf(stdout, "\nPasswords did not match.\n");
+		}
+		passwordTemporaryStorage = "";
+	} else if (input == "hello") {
 		message = std::make_unique<HelloMessage>();
 	} else if (input == "1") {
 		message = std::make_unique<Generic1Message>();
@@ -138,7 +176,11 @@ void TCPClient::handleUserInput(std::string input) {
 	} else if (input == "5") {
 		message = std::make_unique<Generic5Message>();
 	} else if (input == "passwd") {
-		fprintf(stdout, "Operation 'passwd' not yet supported.\n");
+		fprintf(stdout, "Please enter your new password: ");
+		fflush(stdout);
+		clientInputState = ClientInputState::WAITING_FOR_CHANGE_PASSWORD1;
+		passwordTemporaryStorage = "";
+		Security::INSTANCE()->setFDEcho(0, false);
 		return;
 	} else if (input == "menu") {
 		message = std::make_unique<MenuMessage>();
@@ -152,4 +194,30 @@ void TCPClient::handleUserInput(std::string input) {
 	if (message != nullptr) {
 		selector.writeToFD(fd, message->encode());
 	}
+}
+
+void TCPClient::onReadLoginSetUsernameResponse(int fd, const std::shared_ptr<StoredDataType> &data, LoginSetUsernameResponse msg) {
+	if (msg.success) {
+		fprintf(stdout, "Password: ");
+		fflush(stdout);
+		clientInputState = ClientInputState::WAITING_FOR_LOGIN_PASSWORD;
+		Security::INSTANCE()->setFDEcho(0, false);
+	} else {
+		selector.stop();
+	}
+}
+
+void TCPClient::onReadLoginSetPasswordResponse(int fd, const std::shared_ptr<StoredDataType> &data, LoginSetPasswordResponse msg) {
+
+}
+
+void TCPClient::onReadLoginAuthenticateResponse(int fd, const std::shared_ptr<StoredDataType> &data, LoginAuthenticateResponse msg) {
+	clientInputState = ClientInputState::NONE;
+	if (!msg.success) {
+		selector.stop();
+	}
+}
+
+void TCPClient::onReadDisplayMessage(int fd, const std::shared_ptr<StoredDataType> &data, DisplayMessage msg) {
+	write(STDOUT_FILENO, msg.message.c_str(), msg.message.length());
 }
