@@ -1,13 +1,16 @@
 #pragma once
 
-#include "Server.h"
-#include "Selector.h"
+#include <Server.h>
+#include <Selector.h>
 #include <NetworkMessage.h>
+#include <Database.h>
 
 class TCPServer : public Server {
 	using StoredDataType = void;
 	using StoredDataPointer = const std::shared_ptr<StoredDataType>&;
 	Selector<StoredDataType> selector;
+	Database<1, ','> whitelist {"whitelist"};
+	Database<3, ','> passwd    {"passwd"};
 	
 	public:
 	TCPServer();

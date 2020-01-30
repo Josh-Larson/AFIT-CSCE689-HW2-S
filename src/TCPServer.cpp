@@ -9,6 +9,7 @@
 #include <string>
 #include <cstring>
 #include <NetworkMessage.h>
+#include <Database.h>
 
 TCPServer::TCPServer() : Server(),
 						 selector{} {
@@ -46,7 +47,7 @@ void TCPServer::bindSvr(const char *ip_addr, short unsigned int port) {
 	if (listen(fd, 32) < 0)
 		throw socket_error(std::string("failed to listen on server socket: ") + strerror(errno));
 	
-	selector.addFD(FD<void>(fd, nullptr, [this](int fd) -> std::shared_ptr<Buffer>{
+	selector.addFD(FD<void>(fd, nullptr, [&](int fd) -> std::shared_ptr<Buffer>{
 		auto bindAddr = sockaddr_storage{};
 		auto bindAddrLength = socklen_t{sizeof(bindAddr)};
 		auto accepted = accept4(fd, reinterpret_cast<sockaddr*>(&bindAddr), &bindAddrLength, SOCK_NONBLOCK);
@@ -58,7 +59,12 @@ void TCPServer::bindSvr(const char *ip_addr, short unsigned int port) {
 			else
 				data = inet_ntop(bindAddr.ss_family, &(((sockaddr_in6*)&bindAddr)->sin6_addr), addr.data(), addr.size());
 			if (data == nullptr)
-				fprintf(stdout, "Failed to parse IP address: %s\n", strerror(errno));
+				fprintf(stderr, "Failed to parse IP address: %s\n", strerror(errno));
+			if (!whitelist.find([data=std::string(data)](const auto & row) -> bool { return row[0] == data; })) {
+				fprintf(stdout, "Unrecognized client IP: %s\n", data);
+				close(accepted);
+				return nullptr;
+			}
 			fprintf(stdout, "Received connection %d from %s\n", accepted, data);
 			auto greeting = createGreeting();
 			selector.addFD(accepted);
